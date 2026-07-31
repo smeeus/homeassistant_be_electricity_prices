@@ -130,6 +130,9 @@ CONF_CONTRACT: Final = "contract"
 # pricing and only surfaced as a renewal-reminder timestamp sensor.
 CONF_CONTRACT_START_DATE: Final = "contract_start_date"
 CONF_CONTRACT_END_DATE: Final = "contract_end_date"
+# Optional yearly meter-period reset month (day is always 1). When set,
+# yearly cost paths reset on this month/day instead of Jan 1.
+CONF_YEARLY_METER_PERIOD_START_MONTH: Final = "yearly_meter_period_start_month"
 
 # Optional manual signing-rate override, offered on the config flow when a
 # start date is set on a fixed / dynamic contract. Used as the cohort energy

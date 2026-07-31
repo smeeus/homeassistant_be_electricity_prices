@@ -92,6 +92,13 @@
           "solar_regime": "Regime"
         }
       },
+      "yearly_meter_period": {
+        "title": "Periode annuelle du compteur (facultatif)",
+        "description": "Definissez facultativement le mois de debut de votre periode annuelle de compteur. Laissez vide pour conserver une remise a zero du cout annuel au 1er janvier.",
+        "data": {
+          "yearly_meter_period_start_month": "Mois de debut de la periode annuelle"
+        }
+      },
       "meters": {
         "title": "Compteurs (cout de l annee)",
         "description": "Facultatif. Selectionnez soit les quatre registres jour/nuit du compteur (recommande - exact des le depart), soit des capteurs cumulatifs uniques de consommation / injection (l'integration lit les kWh depuis le recorder de HA et repartit chaque journee passee en jour/nuit via l'horaire bi-horaire au besoin). Chaque cote - consommation, injection - est resolu independamment; vous pouvez melanger un cote en registres et l'autre en capteur unique. Quand les deux cablages sont remplis pour le meme cote, les registres jour/nuit l'emportent. Si le tableau de bord Energie de HA est deja configure, les champs cumulatifs - et les registres jour/nuit lorsque un helper utility_meter divise la source en tarifs jour/nuit (ou peak/offpeak, dag/nacht, piek/dal) - sont pre-selectionnes. Les valeurs pre-remplies restent modifiables.",
@@ -316,6 +323,13 @@
         "data": {
           "solar_kva": "Puissance onduleur (kVA)",
           "solar_regime": "Regime"
+        }
+      },
+      "yearly_meter_period": {
+        "title": "[%key:component::be_electricity_prices::config::step::yearly_meter_period::title%]",
+        "description": "[%key:component::be_electricity_prices::config::step::yearly_meter_period::description%]",
+        "data": {
+          "yearly_meter_period_start_month": "[%key:component::be_electricity_prices::config::step::yearly_meter_period::data::yearly_meter_period_start_month%]"
         }
       },
       "meters": {
@@ -623,6 +637,9 @@
       },
       "current_year_cost": {
         "name": "Cout de l annee"
+      },
+      "active_contract_period_cost": {
+        "name": "Cout de la periode de contrat en cours"
       },
       "contract_end_date": {
         "name": "Date de fin du contrat"

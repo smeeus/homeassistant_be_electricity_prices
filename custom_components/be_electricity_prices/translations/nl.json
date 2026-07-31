@@ -92,6 +92,13 @@
           "solar_regime": "Regime"
         }
       },
+      "yearly_meter_period": {
+        "title": "Jaarlijkse meterperiode (optioneel)",
+        "description": "Stel optioneel de startmaand van je jaarlijkse meterperiode in. Laat leeg om de jaarlijkse kost op 1 januari te blijven resetten.",
+        "data": {
+          "yearly_meter_period_start_month": "Startmaand jaarlijkse periode"
+        }
+      },
       "meters": {
         "title": "Energiemeters (kost dit jaar)",
         "description": "Optioneel. Wijs ofwel de vier dag/nacht registers van de meter aan (voorkeur - exact vanaf het begin), of enkele cumulatieve verbruik- / injectiesensoren (de integratie leest kWh uit de HA recorder en splitst elke dag in dag/nacht via het bi-uurlijks schema waar nodig). Elke kant - verbruik, injectie - wordt onafhankelijk bepaald; je kan een kant als registers en de andere als enkele totaalsensor invullen. Wanneer beide bedradingen zijn ingevuld voor dezelfde kant, winnen de dag/nacht registers. Heb je het HA Energie-dashboard al ingesteld, dan worden de cumulatieve velden - en de dag/nacht registers wanneer een utility_meter helper de gridbron in piek/dal (of dag/nacht, jour/nuit, peak/offpeak) tariefen splitst - automatisch voorgeselecteerd. Voorgeselecteerde waarden blijven aanpasbaar.",
@@ -316,6 +323,13 @@
         "data": {
           "solar_kva": "Vermogen omvormer (kVA)",
           "solar_regime": "Regime"
+        }
+      },
+      "yearly_meter_period": {
+        "title": "[%key:component::be_electricity_prices::config::step::yearly_meter_period::title%]",
+        "description": "[%key:component::be_electricity_prices::config::step::yearly_meter_period::description%]",
+        "data": {
+          "yearly_meter_period_start_month": "[%key:component::be_electricity_prices::config::step::yearly_meter_period::data::yearly_meter_period_start_month%]"
         }
       },
       "meters": {
@@ -623,6 +637,9 @@
       },
       "current_year_cost": {
         "name": "Kost dit jaar"
+      },
+      "active_contract_period_cost": {
+        "name": "Kost huidige contractperiode"
       },
       "contract_end_date": {
         "name": "Einddatum van het contract"

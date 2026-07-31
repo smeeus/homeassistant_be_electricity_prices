@@ -45,8 +45,7 @@ the coordinator from each supplier's own publication.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
+import calendar
 import re
 from datetime import date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
@@ -141,6 +140,7 @@ from .const import (
     CONF_SOLAR_KVA,
     CONF_SOLAR_REGIME,
     CONF_SUPPLIER,
+    CONF_YEARLY_METER_PERIOD_START_MONTH,
     CONNECTION_KVA_TIERS,
     CUSTOM_CONTRACT_DYNAMIC,
     CUSTOM_CONTRACT_FIXED,
@@ -809,6 +809,28 @@ def _meters_schema(defaults: dict[str, Any]) -> vol.Schema:
     return vol.Schema(fields)
 
 
+def _yearly_meter_period_schema(defaults: dict[str, Any]) -> vol.Schema:
+    """Optional yearly meter-period reset month (day fixed to 1)."""
+    options = [
+        SelectOptionDict(value=str(i), label=calendar.month_name[i])
+        for i in range(1, 13)
+    ]
+    stored = defaults.get(CONF_YEARLY_METER_PERIOD_START_MONTH)
+    selector = SelectSelector(
+        SelectSelectorConfig(options=options, mode=SelectSelectorMode.DROPDOWN)
+    )
+    if stored is not None:
+        return vol.Schema(
+            {
+                vol.Optional(
+                    CONF_YEARLY_METER_PERIOD_START_MONTH,
+                    description={"suggested_value": str(int(stored))},
+                ): selector
+            }
+        )
+    return vol.Schema({vol.Optional(CONF_YEARLY_METER_PERIOD_START_MONTH): selector})
+
+
 _DAY_TARIFF_TOKENS = frozenset({"peak", "day", "jour", "dag", "piek"})
 _NIGHT_TARIFF_TOKENS = frozenset({"night", "nuit", "nacht", "dal"})
 _TARIFF_SEPARATORS = re.compile(r"[_\-\s]+")
@@ -1319,9 +1341,24 @@ class _WizardStepsMixin:
     async def _after_solar(self) -> ConfigFlowResult:
         if self._needs_injection_api_key():
             return await self.async_step_injection_api_key()
-        if self._is_custom():
-            return await self._custom_tail()
-        return await self.async_step_meters()
+        return await self.async_step_yearly_meter_period()
+
+    async def async_step_yearly_meter_period(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            month_raw = user_input.get(CONF_YEARLY_METER_PERIOD_START_MONTH)
+            if month_raw in (None, ""):
+                self._data.pop(CONF_YEARLY_METER_PERIOD_START_MONTH, None)
+            else:
+                self._data[CONF_YEARLY_METER_PERIOD_START_MONTH] = int(month_raw)
+            if self._is_custom():
+                return await self._custom_tail()
+            return await self.async_step_meters()
+        return self.async_show_form(
+            step_id="yearly_meter_period",
+            data_schema=_yearly_meter_period_schema(self._data),
+        )
 
     async def _custom_tail(self) -> ConfigFlowResult:
         # Collect the injection formula (injection regime only), then the
@@ -1345,11 +1382,11 @@ class _WizardStepsMixin:
             key = (user_input.get(CONF_API_KEY) or "").strip()
             if not key:
                 self._data.pop(CONF_API_KEY, None)
-                return await self.async_step_meters()
+                return await self.async_step_yearly_meter_period()
             err = await _validate_entsoe_key(self.hass, key)
             if err is None:
                 self._data[CONF_API_KEY] = key
-                return await self.async_step_meters()
+                return await self.async_step_yearly_meter_period()
             errors[CONF_API_KEY] = err
         return self.async_show_form(
             step_id="injection_api_key",

@@ -92,6 +92,13 @@
           "solar_regime": "Regime"
         }
       },
+      "yearly_meter_period": {
+        "title": "Yearly meter period (optional)",
+        "description": "Optionally set the start month of your yearly meter period. Leave empty to keep a January 1 reset for yearly cost.",
+        "data": {
+          "yearly_meter_period_start_month": "Yearly period start month"
+        }
+      },
       "meters": {
         "title": "Energy meters (current year cost)",
         "description": "Optional. Either point at the four day/night registers from your meter (preferred - exact from the start), or at single cumulative consumption / injection sensors (the integration reads kWh from HA's recorder and splits each past day's total into day/night via the bi-hourly schedule when needed). Each side - consumption, injection - is resolved independently; you can mix one side as registers and the other as a single total. When both wirings are filled for the same side, the day/night registers win. If you've already set up HA's Energy dashboard, the cumulative fields - and the day/night registers when a utility_meter helper splits the grid source into peak/offpeak (or jour/nuit, dag/nacht, piek/dal) tariffs - are pre-selected for you. Anything pre-filled stays editable.",
@@ -316,6 +323,13 @@
         "data": {
           "solar_kva": "Inverter capacity (kVA)",
           "solar_regime": "Regime"
+        }
+      },
+      "yearly_meter_period": {
+        "title": "[%key:component::be_electricity_prices::config::step::yearly_meter_period::title%]",
+        "description": "[%key:component::be_electricity_prices::config::step::yearly_meter_period::description%]",
+        "data": {
+          "yearly_meter_period_start_month": "[%key:component::be_electricity_prices::config::step::yearly_meter_period::data::yearly_meter_period_start_month%]"
         }
       },
       "meters": {
@@ -623,6 +637,9 @@
       },
       "current_year_cost": {
         "name": "Current year cost"
+      },
+      "active_contract_period_cost": {
+        "name": "Current contract period cost"
       },
       "contract_end_date": {
         "name": "Contract end date"

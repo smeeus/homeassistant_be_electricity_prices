@@ -92,6 +92,13 @@
           "solar_regime": "Regime"
         }
       },
+      "yearly_meter_period": {
+        "title": "Jaehrlicher Zaehlerzeitraum (optional)",
+        "description": "Optional den Startmonat Ihres jaehrlichen Zaehlerzeitraums festlegen. Leer lassen, um die jaehrlichen Kosten weiter am 1. Januar zurueckzusetzen.",
+        "data": {
+          "yearly_meter_period_start_month": "Startmonat des Jahreszeitraums"
+        }
+      },
       "meters": {
         "title": "Energiezaehler (Kosten dieses Jahr)",
         "description": "Optional. Entweder auf die vier Tag-/Nachtregister des Zaehlers zeigen (bevorzugt - exakt von Anfang an), oder auf einzelne kumulative Verbrauchs- / Einspeisesensoren (die Integration liest kWh aus dem HA-Recorder und teilt jeden vergangenen Tag bei Bedarf via Bi-Uhren-Plan in Tag/Nacht). Jede Seite - Verbrauch, Einspeisung - wird unabhaengig aufgeloest; eine Seite als Register und die andere als Gesamtsensor ist erlaubt. Wenn beide Verkabelungen fuer dieselbe Seite ausgefuellt sind, gewinnen die Tag-/Nachtregister. Wenn das HA-Energie-Dashboard bereits eingerichtet ist, werden die kumulativen Felder - und die Tag-/Nachtregister, sofern ein utility_meter Helper die Netzquelle in peak/offpeak (oder jour/nuit, dag/nacht, piek/dal) Tarife teilt - automatisch vorausgewaehlt. Vorausgefuellte Werte bleiben editierbar.",
@@ -316,6 +323,13 @@
         "data": {
           "solar_kva": "Wechselrichter (kVA)",
           "solar_regime": "Regime"
+        }
+      },
+      "yearly_meter_period": {
+        "title": "[%key:component::be_electricity_prices::config::step::yearly_meter_period::title%]",
+        "description": "[%key:component::be_electricity_prices::config::step::yearly_meter_period::description%]",
+        "data": {
+          "yearly_meter_period_start_month": "[%key:component::be_electricity_prices::config::step::yearly_meter_period::data::yearly_meter_period_start_month%]"
         }
       },
       "meters": {
@@ -623,6 +637,9 @@
       },
       "current_year_cost": {
         "name": "Kosten dieses Jahr"
+      },
+      "active_contract_period_cost": {
+        "name": "Kosten der aktuellen Vertragsperiode"
       },
       "contract_end_date": {
         "name": "Vertragsende"
