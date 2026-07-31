@@ -78,6 +78,7 @@ from .const import (
     CONF_CONNECTION_KVA_TIER,
     CONF_CONSUMPTION_KWH,
     CONF_CONTRACT,
+    CONF_CONTRACT_END_DATE,
     CONF_CONTRACT_START_DATE,
     CONF_CUSTOM_INJECTION_MODE,
     CONF_CUSTOM_INJECTION_SPP_WEIGHTED,
@@ -99,6 +100,7 @@ from .const import (
     CONF_SOLAR_KVA,
     CONF_SOLAR_REGIME,
     CONF_SUPPLIER,
+    CONF_YEARLY_METER_PERIOD_START_MONTH,
     DEFAULT_CONNECTION_KVA_TIER,
     DOMAIN,
     DSO_MODE_BI_HORAIRE,
@@ -549,6 +551,61 @@ def _contract_start_month(entry: ConfigEntry) -> date | None:
     return date(d.year, d.month, 1)
 
 
+def _yearly_meter_period_start_month(entry: ConfigEntry) -> int | None:
+    """Configured yearly meter-period start month, or ``None``.
+
+    Month is stored as 1-12 by the options flow; invalid / missing values
+    fall back to ``None`` so callers keep the Jan 1 default.
+    """
+    raw = entry.data.get(CONF_YEARLY_METER_PERIOD_START_MONTH)
+    if raw is None:
+        return None
+    try:
+        month = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return month if 1 <= month <= 12 else None
+
+
+def _yearly_cost_anchor(entry: ConfigEntry, today: date) -> date:
+    """Start date of this entry's current yearly billing period.
+
+    Default is Jan 1. When a yearly meter-period month is configured,
+    anchor at that month/day=1 in the current year unless that date is in
+    the future, in which case anchor in the previous year.
+    """
+    month = _yearly_meter_period_start_month(entry)
+    if month is None:
+        return date(today.year, 1, 1)
+    anchor = date(today.year, month, 1)
+    if anchor > today:
+        return date(today.year - 1, month, 1)
+    return anchor
+
+
+def _is_contract_active(entry: ConfigEntry, today: date) -> bool:
+    """Whether the contract is active on ``today``.
+
+    Active when no end date is configured, or when end date is today/future.
+    """
+    end = _parse_iso_date(entry.data.get(CONF_CONTRACT_END_DATE))
+    return end is None or end >= today
+
+
+def _active_contract_period_anchor(entry: ConfigEntry, today: date) -> date | None:
+    """Start date for active contract-period cost (max one year), or None.
+
+    Uses max(contract_start, yearly_meter_anchor, today-1 year). Returns
+    ``None`` when no contract start date is configured.
+    """
+    start = _parse_iso_date(entry.data.get(CONF_CONTRACT_START_DATE))
+    if start is None:
+        return None
+    yearly_anchor = _yearly_cost_anchor(entry, today)
+    one_year_back = today - timedelta(days=365)
+    return max(start, yearly_anchor, one_year_back)
+
+
 def _manual_energy_leg(
     entry: ConfigEntry, current_snapshot: "SupplierSnapshot"
 ) -> EnergyRates | None:
@@ -802,6 +859,10 @@ class CoordinatorData:
     # negative when injection credit exceeds consumption + pro-rated
     # fees; for "none" only consumption counts.
     current_year_cost_eur: float | None = None
+    # Running bill for the active contract period only (max 1 year), using the
+    # same pricing engine as current_year_cost. None when contract start is
+    # unset; kept at its previous value when the contract is no longer active.
+    active_contract_period_cost_eur: float | None = None
     # Optional diagnostic breakdown behind current_year_cost: YTD and today
     # consumption / injection kWh, the pre-clamp raw energy term and the fees
     # floor. Populated only on the static per-day (fixed / variable) path;
@@ -910,6 +971,9 @@ class BePricesCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # rolling twelve Fluvius averages to bill the capacity tariff.
         self._peak_history: dict[str, float] = {}
         self._last_error: str = ""
+        # Keep the last computed active contract-period cost so the entity can
+        # keep its value when the contract ends.
+        self._active_contract_period_cost_eur: float | None = None
         # Set by async_unload_entry. A slow in-flight tick can resume after
         # the entry was unloaded or removed; without this flag it would
         # resurrect a just-deleted Repairs issue or rewrite the removed
@@ -1264,17 +1328,36 @@ class BePricesCoordinator(DataUpdateCoordinator[CoordinatorData]):
             injection_snapshot, self.entry, spot_prices
         )
         ytd_breakdown: dict[str, float] = {}
+        today_local = dt_util.now().date()
+        yearly_anchor = _yearly_cost_anchor(self.entry, today_local)
         current_year_cost = await _compute_current_year_cost(
             self.hass,
             self._session,
             get_extractor(self.entry.data[CONF_SUPPLIER]),
             self._snapshot,
             self.entry,
+            period_start=yearly_anchor,
             historical_spots=self._historical_spots,
             spp_weights=self._spp_weights if spp_weighted else None,
             breakdown=ytd_breakdown,
             billed_peak_kw=billed_peak,
         )
+        if _is_contract_active(self.entry, today_local):
+            active_anchor = _active_contract_period_anchor(self.entry, today_local)
+            if active_anchor is not None:
+                self._active_contract_period_cost_eur = (
+                    await _compute_current_year_cost(
+                        self.hass,
+                        self._session,
+                        get_extractor(self.entry.data[CONF_SUPPLIER]),
+                        self._snapshot,
+                        self.entry,
+                        period_start=active_anchor,
+                        historical_spots=self._historical_spots,
+                        spp_weights=self._spp_weights if spp_weighted else None,
+                        billed_peak_kw=billed_peak,
+                    )
+                )
 
         await self._save_persistent()
 
@@ -1311,6 +1394,7 @@ class BePricesCoordinator(DataUpdateCoordinator[CoordinatorData]):
             ),
             energy_fund_eur_per_month=self._snapshot.taxes.energy_fund_eur_per_month,
             current_year_cost_eur=current_year_cost,
+            active_contract_period_cost_eur=self._active_contract_period_cost_eur,
             ytd_diagnostics=ytd_breakdown or None,
         )
 
@@ -3312,11 +3396,12 @@ async def _walk_ytd_months(
     snapshot: SupplierSnapshot,
     entry: ConfigEntry,
     today: date,
+    period_start: date,
     *,
     contract: str | None = None,
 ) -> AsyncIterator[tuple[SupplierSnapshot, date, int, int]]:
     """Yield ``(snap_m, month_first, days_in_full_month, days_in_ytd)``
-    for each month from Jan 1 of today's year up through today.
+    for each month from ``period_start`` up through today.
 
     Centralises the per-month walk shared by every YTD accumulator so
     the proration formula and the per-month archive lookup stay in one
@@ -3329,7 +3414,7 @@ async def _walk_ytd_months(
     """
     region = entry.data.get(CONF_REGION, "")
     contract = contract or entry.data[CONF_CONTRACT]
-    cur = date(today.year, 1, 1)
+    cur = period_start
     while cur <= today:
         month_first = date(cur.year, cur.month, 1)
         snap_m = await _effective_snapshot_for_month(
@@ -3353,6 +3438,7 @@ async def _ytd_static_fees(
     snapshot: SupplierSnapshot,
     entry: ConfigEntry,
     today: date,
+    period_start: date,
     *,
     contract: str | None = None,
     meter: MeterType | None = None,
@@ -3372,7 +3458,14 @@ async def _ytd_static_fees(
     days_in_year = 366 if calendar.isleap(today.year) else 365
     total = 0.0
     async for snap_m, _, _, days_in_ytd in _walk_ytd_months(
-        hass, session, extractor, snapshot, entry, today, contract=contract
+        hass,
+        session,
+        extractor,
+        snapshot,
+        entry,
+        today,
+        period_start,
+        contract=contract,
     ):
         annual = _annual_static_fees(
             snap_m, meter or entry.data.get(CONF_METER, METER_MONO), entry
@@ -3388,6 +3481,7 @@ async def _ytd_prosumer(
     snapshot: SupplierSnapshot,
     entry: ConfigEntry,
     today: date,
+    period_start: date,
     *,
     contract: str | None = None,
 ) -> float:
@@ -3410,7 +3504,14 @@ async def _ytd_prosumer(
 
     total = 0.0
     async for snap_m, _, days_in_full_month, days_in_ytd in _walk_ytd_months(
-        hass, session, extractor, snapshot, entry, today, contract=contract
+        hass,
+        session,
+        extractor,
+        snapshot,
+        entry,
+        today,
+        period_start,
+        contract=contract,
     ):
         overlay = snap_m.dsos.get(dso)
         monthly_fee = _prosumer_monthly_fee(overlay, snap_m, kva)
@@ -3427,6 +3528,7 @@ async def _ytd_capacity(
     snapshot: SupplierSnapshot,
     entry: ConfigEntry,
     today: date,
+    period_start: date,
     billed_peak_kw: float,
     *,
     contract: str | None = None,
@@ -3451,7 +3553,14 @@ async def _ytd_capacity(
 
     total = 0.0
     async for snap_m, _, days_in_full_month, days_in_ytd in _walk_ytd_months(
-        hass, session, extractor, snapshot, entry, today, contract=contract
+        hass,
+        session,
+        extractor,
+        snapshot,
+        entry,
+        today,
+        period_start,
+        contract=contract,
     ):
         overlay = snap_m.dsos.get(dso)
         if overlay is None or overlay.capacity_eur_per_kw_year is None:
@@ -3600,6 +3709,7 @@ async def _ytd_hourly_energy(
     snapshot: SupplierSnapshot,
     entry: ConfigEntry,
     today: date,
+    period_start: date,
     *,
     contract: str | None = None,
     meter: MeterType | None = None,
@@ -3665,9 +3775,8 @@ async def _ytd_hourly_energy(
     if not cons_ids and not inj_ids:
         return None
 
-    jan1 = date(today.year, 1, 1)
-    cons_per_hour = await _sum_hourly_kwh(hass, cons_ids, jan1, today)
-    inj_per_hour = await _sum_hourly_kwh(hass, inj_ids, jan1, today)
+    cons_per_hour = await _sum_hourly_kwh(hass, cons_ids, period_start, today)
+    inj_per_hour = await _sum_hourly_kwh(hass, inj_ids, period_start, today)
 
     _snap_for = _month_snapshot_cache(
         hass, session, extractor, contract, region, snapshot, entry
@@ -3762,6 +3871,7 @@ async def _ytd_spot_injection_credit(
     snapshot: SupplierSnapshot,
     entry: ConfigEntry,
     today: date,
+    period_start: date,
     historical_spots: dict[datetime, float] | None,
 ) -> float:
     """YTD solar-injection credit (EUR) for a contract whose injection is
@@ -3791,8 +3901,7 @@ async def _ytd_spot_injection_credit(
     inj_ids = _hourly_injection_sensors(entry)
     if not inj_ids:
         return 0.0
-    jan1 = date(today.year, 1, 1)
-    per_hour = await _sum_hourly_kwh(hass, inj_ids, jan1, today)
+    per_hour = await _sum_hourly_kwh(hass, inj_ids, period_start, today)
     credit = 0.0
     for utc_hour, kwh in per_hour.items():
         spot = historical_spots.get(utc_hour)
@@ -3811,6 +3920,7 @@ async def _compute_current_year_cost(
     extractor: SupplierExtractor,
     snapshot: SupplierSnapshot,
     entry: ConfigEntry,
+    period_start: date | None = None,
     *,
     contract_override: str | None = None,
     meter_override: MeterType | None = None,
@@ -3904,6 +4014,9 @@ async def _compute_current_year_cost(
     which don't produce daily kWh totals.
     """
     today = dt_util.now().date()
+    period_start = period_start or _yearly_cost_anchor(entry, today)
+    if period_start > today:
+        return 0.0
     # contract / meter overrides let the OptionsFlow's compare path run
     # this same engine against an alternative supplier's snapshot
     # without mutating the live entry. The user's region / DSO / regime /
@@ -3928,13 +4041,26 @@ async def _compute_current_year_cost(
     )
     eff_energy = snapshot.energy if cohort_energy is None else cohort_energy
 
-    jan1 = date(today.year, 1, 1)
-
     static_fees = await _ytd_static_fees(
-        hass, session, extractor, snapshot, entry, today, contract=contract, meter=meter
+        hass,
+        session,
+        extractor,
+        snapshot,
+        entry,
+        today,
+        period_start,
+        contract=contract,
+        meter=meter,
     )
     prosumer_ytd = await _ytd_prosumer(
-        hass, session, extractor, snapshot, entry, today, contract=contract
+        hass,
+        session,
+        extractor,
+        snapshot,
+        entry,
+        today,
+        period_start,
+        contract=contract,
     )
     capacity_ytd = await _ytd_capacity(
         hass,
@@ -3943,6 +4069,7 @@ async def _compute_current_year_cost(
         snapshot,
         entry,
         today,
+        period_start,
         billed_peak_kw,
         contract=contract,
     )
@@ -3962,6 +4089,7 @@ async def _compute_current_year_cost(
             snapshot,
             entry,
             today,
+            period_start,
             contract=contract,
             meter=meter,
             historical_spots=historical_spots,
@@ -3983,6 +4111,7 @@ async def _compute_current_year_cost(
             snapshot,
             entry,
             today,
+            period_start,
             contract=contract,
             meter=meter,
             historical_spots=historical_spots,
@@ -4015,6 +4144,7 @@ async def _compute_current_year_cost(
             snapshot,
             entry,
             today,
+            period_start,
             contract=contract,
             meter=meter,
         )
@@ -4026,7 +4156,7 @@ async def _compute_current_year_cost(
             # above. Apply the same per-hour spot-replayed credit the
             # daily path uses; a no-op for monthly-indicative injection.
             hourly_energy -= await _ytd_spot_injection_credit(
-                hass, snapshot, entry, today, historical_spots
+                hass, snapshot, entry, today, period_start, historical_spots
             )
         return hourly_energy + fees
 
@@ -4075,7 +4205,7 @@ async def _compute_current_year_cost(
         return bundle
 
     energy_cost = 0.0
-    for day in _days_through(jan1, today):
+    for day in _days_through(period_start, today):
         bundle = await _resolve_month(date(day.year, day.month, 1))
         if bundle is None:
             # Dynamic / TOU month: no stable rate to apply for any of
@@ -4128,7 +4258,7 @@ async def _compute_current_year_cost(
         # spot-replayed credit
         # here. A no-op (0.0) for every other contract.
         energy_cost -= await _ytd_spot_injection_credit(
-            hass, snapshot, entry, today, historical_spots
+            hass, snapshot, entry, today, period_start, historical_spots
         )
         # This regime has no compensation clamp, so the billed energy is
         # already the raw energy term.

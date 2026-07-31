@@ -59,6 +59,7 @@ from .coordinator import (
     BePricesCoordinator,
     CoordinatorData,
     _parse_iso_date,
+    _yearly_cost_anchor,
     supplier_device_info,
 )
 from .pricing import PriceBreakdown, breakdown_row, slot_start
@@ -447,9 +448,17 @@ FEE_SENSORS: tuple[BePriceSensorDescription, ...] = (
         native_unit_of_measurement="EUR",
         suggested_display_precision=2,
         value_fn=lambda d: d.current_year_cost_eur,
-        last_reset_fn=lambda: dt_util.now().replace(
-            month=1, day=1, hour=0, minute=0, second=0, microsecond=0
-        ),
+        last_reset_fn=None,
+    ),
+    BePriceSensorDescription(
+        key="active_contract_period_cost",
+        translation_key="active_contract_period_cost",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.TOTAL,
+        native_unit_of_measurement="EUR",
+        suggested_display_precision=2,
+        value_fn=lambda d: d.active_contract_period_cost_eur,
+        last_reset_fn=None,
     ),
 )
 
@@ -563,6 +572,11 @@ class BePriceSensor(CoordinatorEntity[BePricesCoordinator], SensorEntity):
 
     @property
     def last_reset(self) -> datetime | None:
+        if self.entity_description.key == "current_year_cost":
+            anchor = _yearly_cost_anchor(self.coordinator.entry, dt_util.now().date())
+            return dt_util.start_of_local_day(anchor)
+        if self.entity_description.key == "active_contract_period_cost":
+            return None
         fn = self.entity_description.last_reset_fn
         return fn() if fn is not None else None
 

@@ -61,6 +61,8 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_CONTRACT,
+    CONF_CONTRACT_END_DATE,
+    CONF_CONTRACT_START_DATE,
     CONF_DSO,
     CONF_DSO_TARIFF_MODE,
     CONF_METER,
@@ -79,8 +81,10 @@ from .const import (
 from .coordinator import (
     BePricesCoordinator,
     _annual_static_fees,
+    _active_contract_period_anchor,
     _cohort_energy_leg,
     _contract_start_month,
+    _is_contract_active,
     _historical_injection_rate,
     _hourly_consumption_sensors,
     _hourly_injection_sensors,
@@ -93,6 +97,7 @@ from .coordinator import (
     _spp_injection_spot,
     _spp_weighting_enabled,
     _sum_hourly_kwh,
+    _yearly_cost_anchor,
 )
 from .pricing import compute_breakdown
 from .providers import DynamicRates, SpotMonthlyRates, get as get_extractor
@@ -114,6 +119,7 @@ _PRICE_SENSOR_KEYS: tuple[str, ...] = (
 )
 _INJECTION_PRICE_SENSOR_KEY = "injection_price"
 _COST_SENSOR_KEY = "current_year_cost"
+_ACTIVE_COST_SENSOR_KEY = "active_contract_period_cost"
 
 
 def _solar_kva(entry: ConfigEntry) -> float:
@@ -153,8 +159,42 @@ def _floor_to_hour_utc(when: datetime) -> datetime:
     return when.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
 
 
+def _parse_iso_date(value: Any) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_shift_year(day: date, year: int) -> date:
+    """Return ``day`` moved to ``year``, clamping Feb 29 to Feb 28."""
+    try:
+        return day.replace(year=year)
+    except ValueError:
+        return date(year, 2, 28)
+
+
+def _default_backfill_start_date(entry: ConfigEntry, today: date) -> date:
+    """Default backfill start date using contract and yearly-period rules."""
+    contract_start = _parse_iso_date(entry.data.get(CONF_CONTRACT_START_DATE))
+    if contract_start is not None:
+        start = _safe_shift_year(contract_start, today.year - 1)
+    else:
+        start = date(today.year, 1, 1)
+    yearly_anchor = _yearly_cost_anchor(entry, today)
+    if contract_start is None:
+        return yearly_anchor
+    if start < yearly_anchor:
+        return yearly_anchor
+    return start
+
+
 def _normalize_window(
-    start: datetime | date | None, end: datetime | date | None
+    start: datetime | date | None,
+    end: datetime | date | None,
+    entry: ConfigEntry,
 ) -> tuple[datetime, datetime]:
     """Return aware UTC [start_utc, end_utc) clamped to whole-hour buckets.
 
@@ -164,8 +204,9 @@ def _normalize_window(
     """
     now_local = dt_util.now()
     if start is None:
-        start_local = now_local.replace(
-            month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+        start_date = _default_backfill_start_date(entry, now_local.date())
+        start_local = datetime.combine(
+            start_date, datetime.min.time(), tzinfo=dt_util.DEFAULT_TIME_ZONE
         )
     elif isinstance(start, datetime):
         start_local = (
@@ -178,7 +219,15 @@ def _normalize_window(
             start, datetime.min.time(), tzinfo=dt_util.DEFAULT_TIME_ZONE
         )
     if end is None:
-        end_local = now_local
+        contract_end = _parse_iso_date(entry.data.get(CONF_CONTRACT_END_DATE))
+        if contract_end is not None and contract_end < now_local.date():
+            end_local = datetime.combine(
+                contract_end + timedelta(days=1),
+                datetime.min.time(),
+                tzinfo=dt_util.DEFAULT_TIME_ZONE,
+            )
+        else:
+            end_local = now_local
     elif isinstance(end, datetime):
         end_local = (
             end
@@ -503,6 +552,7 @@ async def _backfill_cost_sensor(
     hours: list[datetime],
     spots: dict[datetime, float],
     emit_from: datetime | None = None,
+    sensor_key: str = _COST_SENSOR_KEY,
 ) -> dict[str, int]:
     """Write cumulative state/sum rows for ``current_year_cost`` over ``hours``.
 
@@ -545,7 +595,7 @@ async def _backfill_cost_sensor(
         async_import_statistics,
     )
 
-    sid = _stat_id(hass, entry, _COST_SENSOR_KEY)
+    sid = _stat_id(hass, entry, sensor_key)
     if sid is None:
         return {}
 
@@ -769,24 +819,28 @@ async def backfill_range(
     if coordinator._snapshot is None:
         raise RuntimeError("supplier snapshot not loaded; refresh the entry first")
 
-    start_utc, end_utc = _normalize_window(start, end)
+    start_utc, end_utc = _normalize_window(start, end, entry)
     if start_utc >= end_utc:
         return {"rows_written": 0, "sensors": {}, "range": [None, None]}
 
-    # The cost sensor is a cumulative TOTAL that resets each Jan 1, and
+    # The cost sensor is a cumulative TOTAL that resets each yearly-period
+    # anchor, and
     # the recorder renders the Energy dashboard's cost change as
     # (sum - prev_sum), ignoring last_reset for imported stats. So the
-    # cost series must stay within ONE calendar year: anchor it on Jan 1
-    # of the END year and accumulate forward from there. A mid-year start
+    # cost series must stay within ONE yearly period: anchor it on the
+    # configured yearly meter-period start of the END side and accumulate
+    # forward from there. A mid-year start
     # in the same year still gets the correct YTD because we accumulate
-    # from Jan 1 and only emit from the requested start; a multi-year
+    # from that anchor and only emit from the requested start; a multi-year
     # request simply backfills the current (end) year's cost, never
     # crossing a boundary that would drop the sum to ~0 and paint a
     # spurious negative cost. The price (mean) sensors are unaffected by
     # this and keep the full requested window.
+    end_local_day = dt_util.as_local(end_utc).date()
+    anchor_day = _yearly_cost_anchor(entry, end_local_day)
     cost_anchor_utc = _floor_to_hour_utc(
-        dt_util.as_local(end_utc).replace(
-            month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+        datetime.combine(
+            anchor_day, datetime.min.time(), tzinfo=dt_util.DEFAULT_TIME_ZONE
         )
     )
     if clear and start_utc > cost_anchor_utc:
@@ -799,9 +853,9 @@ async def backfill_range(
         # cleared rows (start on or before the year anchor).
         raise ServiceValidationError(
             "clear=True deletes the entire statistics series, but this "
-            "window starts after 1 January of the end year, so the cleared "
+            "window starts after the yearly meter-period anchor, so the cleared "
             "rows before the start would not be re-imported. Re-run with a "
-            "window starting on or before 1 January, or leave clear off (a "
+            "window starting on or before the anchor, or leave clear off (a "
             "re-import already overwrites the requested hours)."
         )
     # Fetch spots over the union of the price window and the cost window
@@ -816,19 +870,9 @@ async def backfill_range(
 
     if clear:
         ids: list[str] = []
-        keys = list(_PRICE_SENSOR_KEYS)
-        # The price series are re-imported over the WHOLE requested window, so
-        # wiping them is always matched by the re-import. The cost series is
-        # not: it is deliberately re-imported only over the end year
-        # (cost_hours above), while _clear_all is series-scoped and deletes
-        # every row it has. On a window that reaches back past 1 January of the
-        # end year that combination permanently destroyed prior years' cost
-        # history. Only wipe it when the request IS exactly the end year, which
-        # (given the guard above rejects a later start) means start == anchor.
-        # Skipping the wipe is safe: async_import_statistics upserts on
-        # (statistic_id, start), so the re-imported year still lands.
-        if start_utc == cost_anchor_utc:
-            keys.append(_COST_SENSOR_KEY)
+        keys = list(_PRICE_SENSOR_KEYS) + [_COST_SENSOR_KEY]
+        if _active_contract_period_anchor(entry, end_local_day) is not None:
+            keys.append(_ACTIVE_COST_SENSOR_KEY)
         if entry.data.get(CONF_SOLAR_REGIME) == SOLAR_REGIME_INJECTION:
             keys.append(_INJECTION_PRICE_SENSOR_KEY)
         for key in keys:
@@ -844,6 +888,28 @@ async def backfill_range(
             hass, entry, coordinator, cost_hours, spots, emit_from=cost_emit_from
         )
     )
+    active_anchor_day = _active_contract_period_anchor(entry, end_local_day)
+    if _is_contract_active(entry, end_local_day) and active_anchor_day is not None:
+        active_anchor_utc = _floor_to_hour_utc(
+            datetime.combine(
+                active_anchor_day,
+                datetime.min.time(),
+                tzinfo=dt_util.DEFAULT_TIME_ZONE,
+            )
+        )
+        active_hours = _hour_iter(active_anchor_utc, end_utc)
+        active_emit_from = max(start_utc, active_anchor_utc)
+        counts.update(
+            await _backfill_cost_sensor(
+                hass,
+                entry,
+                coordinator,
+                active_hours,
+                spots,
+                emit_from=active_emit_from,
+                sensor_key=_ACTIVE_COST_SENSOR_KEY,
+            )
+        )
     total = sum(counts.values())
     _LOGGER.info(
         "backfill wrote %d statistic rows for %s over %s..%s",
@@ -897,15 +963,16 @@ async def backfill_if_missing(
         )
         return None
     now_local = dt_util.now()
-    jan1_local = now_local.replace(
-        month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+    default_start = _default_backfill_start_date(entry, now_local.date())
+    start_local = datetime.combine(
+        default_start, datetime.min.time(), tzinfo=dt_util.DEFAULT_TIME_ZONE
     )
-    jan1_utc = jan1_local.astimezone(UTC)
-    if await _existing_stat_window(hass, sid, jan1_utc):
+    start_utc = start_local.astimezone(UTC)
+    if await _existing_stat_window(hass, sid, start_utc):
         _LOGGER.debug(
             "backfill skipped: statistics already present at %s for %s",
-            jan1_utc.isoformat(),
+            start_utc.isoformat(),
             sid,
         )
         return None
-    return await backfill_range(hass, entry, jan1_local, now_local)
+    return await backfill_range(hass, entry, start_local, now_local)
