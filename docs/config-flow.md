@@ -30,12 +30,13 @@ Related docs:
 
 Both flows walk the *same* chain: `supplier/region -> contract -> dso -> meter ->
 (dso_tariff_mode) -> (api_key) -> (custom_energy) -> (capacity) ->
-(connection_power) -> solar -> (injection_api_key) -> (custom_injection) ->
-(custom_dso) -> (custom_tax) -> meters`. The four `custom_*` steps run only for
-the expert custom supplier. Only the entry step and `_finalize` differ. The
-mixin's docstring at `config_flow.py:1159` states the invariant: `_after_meter` is
-overridden in `BePricesConfigFlow` to add the install-time unique-id reject, and
-`_finalize` is abstract (`config_flow.py:1503` raises `NotImplementedError`).
+(connection_power) -> solar -> (injection_api_key) -> yearly_meter_period ->
+(custom_injection) -> (custom_dso) -> (custom_tax) -> meters`. The four
+`custom_*` steps run only for the expert custom supplier, and are now reached
+after `yearly_meter_period`. Only the entry step and `_finalize` differ. The
+mixin's docstring at `config_flow.py:1141` states the invariant: `_after_meter`
+is overridden in `BePricesConfigFlow` to add the install-time unique-id reject,
+and `_finalize` is abstract (`config_flow.py:1467` raises `NotImplementedError`).
 
 The OptionsFlow pre-fills every field with the current value, so a user can change
 anything post-install (including supplier, contract, and region). On finalize it
@@ -57,10 +58,11 @@ the "Shown when" column gives the gate.
 | `dso_tariff_mode` | `async_step_dso_tariff_mode` (`config_flow.py:1383`) | DSO billing mode (simple/bi/impact) | `CONF_DSO_TARIFF_MODE` | Region == Wallonia (`config_flow.py:1398`) |
 | `api_key` | `async_step_api_key` (`config_flow.py:1262`) | ENTSO-E token (required) | `CONF_API_KEY` | Contract kind == `dynamic` or `spot_monthly` (both are spot-indexed) |
 | `custom_energy` | `async_step_custom_energy` | Commodity formula (mode-dependent fields) | `CONF_CUSTOM_ENERGY_*`, `CONF_CUSTOM_YEARLY_FIXED_FEE` | Custom supplier only, after the energy/api-key step |
-| `capacity` | `async_step_capacity` (`config_flow.py:1280`) | Peak source (sensor/fixed) + value | `CONF_CAPACITY_MODE`, `CONF_CAPACITY_PEAK_SENSOR`, `CONF_CAPACITY_FIXED_KW` | Region == Flanders (`config_flow.py:1453`, `:1418`) |
-| `connection_power` | `async_step_connection_power` (`config_flow.py:1411`) | Brussels connection-power tier | `CONF_CONNECTION_KVA_TIER` | Region == Brussels (`config_flow.py:1426`) |
-| `solar` | `async_step_solar` (`config_flow.py:1296`) | Inverter kVA + regime | `CONF_SOLAR_KVA`, `CONF_SOLAR_REGIME` | Always |
-| `injection_api_key` | `async_step_injection_api_key` (`config_flow.py:1333`) | ENTSO-E token (optional) | `CONF_API_KEY` | `_needs_injection_api_key` true (`config_flow.py:1306`) |
+| `capacity` | `async_step_capacity` (`config_flow.py:1262`) | Peak source (sensor/fixed) + value | `CONF_CAPACITY_MODE`, `CONF_CAPACITY_PEAK_SENSOR`, `CONF_CAPACITY_FIXED_KW` | Region == Flanders (`config_flow.py:1417`, `:1418`) |
+| `connection_power` | `async_step_connection_power` (`config_flow.py:1375`) | Brussels connection-power tier | `CONF_CONNECTION_KVA_TIER` | Region == Brussels (`config_flow.py:1390`) |
+| `solar` | `async_step_solar` (`config_flow.py:1274`) | Inverter kVA + regime | `CONF_SOLAR_KVA`, `CONF_SOLAR_REGIME` | Always |
+| `injection_api_key` | `async_step_injection_api_key` (`config_flow.py:1311`) | ENTSO-E token (optional) | `CONF_API_KEY` | `_needs_injection_api_key` true (`config_flow.py:1284`) |
+| `yearly_meter_period` | `async_step_yearly_meter_period` | Optional yearly reset month for cost sensors | `CONF_YEARLY_METER_PERIOD_START_MONTH` | Always after `solar` / `injection_api_key` |
 | `custom_injection` | `async_step_custom_injection` | Injection formula (flat / spot / monthly-mean, floor; plus an SPP-weighted toggle on the monthly-average mode) | `CONF_CUSTOM_INJECTION_*` | Custom supplier on the injection regime |
 | `custom_dso` | `async_step_custom_dso` | Hand-entered DSO overlay (region/meter-relevant fields) | `CONF_CUSTOM_DSO_*` | Custom supplier only |
 | `custom_tax` | `async_step_custom_tax` | Hand-entered taxes/levies + VAT rate | `CONF_CUSTOM_TAX_*`, `CONF_CUSTOM_VAT_RATE` | Custom supplier only |
@@ -101,10 +103,12 @@ the "Shown when" column gives the gate.
                           async_step_solar  ◄────────────┘
                                           │
         _after_solar → _needs_injection_api_key? ─ yes → async_step_injection_api_key
-                                          │                     │ (optional, skippable)
-                          _custom_tail  ── custom? → (custom_injection) →
-                                          │            custom_dso → custom_tax
-                          async_step_meters  ◄──────────────────┘
+                  │                     │ (optional, skippable)
+              async_step_yearly_meter_period
+                  │
+              _custom_tail  ── custom? → (custom_injection) →
+                  │            custom_dso → custom_tax
+              async_step_meters  ◄──────────────────┘
                                           │
                           _finalize  (create entry / update entry)
 ```

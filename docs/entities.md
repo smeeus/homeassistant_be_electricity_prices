@@ -105,6 +105,7 @@ pulls (all fields defined at `coordinator.py:738`).
 | Fixed fee per year | `fixed_fee_eur_per_year` | - | MEASUREMENT | EUR | `yearly_fixed_fee_eur` |
 | Energy fund per month | `energy_fund_eur_per_month` | - | MEASUREMENT | EUR | `energy_fund_eur_per_month` |
 | Current year cost | `current_year_cost` | MONETARY | TOTAL | EUR | `current_year_cost_eur` |
+| Current contract period cost | `active_contract_period_cost` | MONETARY | TOTAL | EUR | `active_contract_period_cost_eur` |
 | Capacity cost | `capacity_cost` | - | MEASUREMENT | EUR | `capacity_cost_eur` (Flanders only); also `billed_peak_kw` / `months_counted` attributes |
 | Monthly peak power | `monthly_peak_kw` | POWER | MEASUREMENT | kW | `monthly_peak_kw`, the running month as measured and NOT floored (Flanders only) |
 | Prosumer cost | `prosumer_cost` | - | MEASUREMENT | EUR | `prosumer_cost_eur` (compensation regime) |
@@ -239,11 +240,22 @@ statistics setup, documented in its source comment:
 - `state_class=TOTAL` (not `TOTAL_INCREASING`): under the compensation regime a
   heavy-injection day can lower the running total day-over-day, which
   `TOTAL_INCREASING` forbids.
-- `last_reset` (`sensor.py:565`) is pinned to Jan 1 00:00 local via
-  `last_reset_fn`, so long-term statistics bucket each calendar year separately.
+- `last_reset` (`sensor.py:565`) is pinned to the active yearly-cost anchor via
+  `_yearly_cost_anchor` (defaults to Jan 1 00:00 local, optional user month override),
+  so long-term statistics bucket each meter year correctly.
 
 The value is always numeric: missing meter inputs collapse to the fees-only
 floor, so the sensor never goes `unknown`.
+
+### `active_contract_period_cost`
+
+`active_contract_period_cost` is emitted only when a contract start date exists
+and the contract is currently active. It uses `state_class=TOTAL` and exposes
+the running cost from the active contract period anchor to now, where the
+anchor is capped to at most one year (`max(contract_start, yearly_anchor, today-365d)`).
+Unlike `current_year_cost`, it does not set `last_reset`: the period is tied to
+contract activity rather than a fixed yearly bucket and naturally disappears
+once the contract is no longer active.
 
 ### `monthly_peak_kw`: why MEASUREMENT
 

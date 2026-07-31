@@ -305,8 +305,8 @@ and ENTSO-E historical spots via the coordinator's persistent cache
 
 | Function | Trigger | Behaviour |
 | --- | --- | --- |
-| `backfill_range` (`backfill.py:750`) | `backfill_statistics` service | Always runs over the requested range; `clear=True` deletes the series first. |
-| `backfill_if_missing` (`backfill.py:862`) | fire-and-forget task from `async_setup_entry` | Probes the recorder at the Jan 1 anchor and runs only when nothing exists. |
+| `backfill_range` (`backfill.py:786`) | `backfill_statistics` service | Always runs over the requested range; `clear=True` deletes the series first. |
+| `backfill_if_missing` (`backfill.py:914`) | fire-and-forget task from `async_setup_entry` | Probes the recorder at the computed default anchor and runs only when nothing exists. |
 
 There is no backfill button. The only button in the integration is
 `reset_monthly_peak` (`button.py:41`). Backfill is reached either automatically
@@ -319,12 +319,20 @@ window services (`__init__.py:525`).
 `backfill_if_missing` tolerates entry removal mid-flight: because it runs as a
 background task the user can delete the entry between scheduling and execution,
 so it bails when `async_get_entry` returns `None` or `runtime_data` is no longer
-a coordinator (`backfill.py:879`).
+a coordinator (`backfill.py:931`).
+
+Default window anchoring is contract-aware: when a contract start date exists,
+the implicit start is that same month/day in `current_year - 1`, clamped upward
+to the configured yearly meter-period anchor; without a contract start date it
+uses the yearly anchor directly (Jan 1 by default). If a contract end date is
+configured and already in the past, the implicit end is capped to the day after
+that date (exclusive upper bound), so the auto backfill does not extend beyond
+the historical contract period.
 
 ### Statistic ids and the two statistic shapes
 
 The statistic id is the sensor's entity id, resolved from the entity registry by
-unique id `f"{entry_id}_{key}"` via `_stat_id` (`backfill.py:127`). When the
+unique id `f"{entry_id}_{key}"` via `_stat_id` (`backfill.py:132`). When the
 entity is not registered yet (the auto path can fire before platform setup
 completes), the sensor is skipped silently and reported with a 0 count rather
 than fabricating a slug that would diverge from a user-renamed entity.
@@ -335,6 +343,7 @@ Two families of statistics are written:
 | --- | --- | --- | --- | --- |
 | `current_price`, `energy_component`, `network_component`, `taxes_component`, and `injection_price` (injection regime only) | `mean` | `mean_type=ARITHMETIC`, `has_sum=False` | `StatisticData(start, mean, min, max)` | `EUR/kWh` |
 | `current_year_cost` | `sum` | `mean_type=NONE`, `has_sum=True` | `StatisticData(start, state, sum)` | `EUR` |
+| `active_contract_period_cost` (active contracts with start date only) | `sum` | `mean_type=NONE`, `has_sum=True` | `StatisticData(start, state, sum)` | `EUR` |
 
 These are `async_import_statistics` external statistics (`source="recorder"`),
 not internal long-term statistics derived from a live sensor state. The key list
