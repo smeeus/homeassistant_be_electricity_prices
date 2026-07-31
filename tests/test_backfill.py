@@ -41,7 +41,10 @@ from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.be_electricity_prices import backfill as bf
-from custom_components.be_electricity_prices.const import DOMAIN
+from custom_components.be_electricity_prices.const import (
+    CONF_YEARLY_METER_PERIOD_START_MONTH,
+    DOMAIN,
+)
 from custom_components.be_electricity_prices.providers.base import (
     FixedRates,
     SupplierSnapshot,
@@ -99,7 +102,7 @@ def test_solar_kva_invalid_inputs_clamp_to_zero() -> None:
 def test_normalize_window_defaults_to_jan1_through_now() -> None:
     fixed_now = datetime(2026, 5, 4, 13, 30, tzinfo=BRUSSELS)
     with patch.object(dt_util, "now", return_value=fixed_now):
-        start_utc, end_utc = bf._normalize_window(None, None)
+        start_utc, end_utc = bf._normalize_window(None, None, _entry())
     assert start_utc == datetime(2026, 1, 1, 0, 0, tzinfo=BRUSSELS).astimezone(UTC)
     # End is floored to the top of the current hour, exclusive of the
     # in-progress hour.
@@ -110,9 +113,31 @@ def test_normalize_window_treats_naive_datetime_as_local_tz() -> None:
     naive = datetime(2026, 3, 1, 6, 0)  # no tzinfo
     fixed_now = datetime(2026, 5, 4, 13, 30, tzinfo=BRUSSELS)
     with patch.object(dt_util, "now", return_value=fixed_now):
-        start_utc, _ = bf._normalize_window(naive, None)
+        start_utc, _ = bf._normalize_window(naive, None, _entry())
     expected = naive.replace(tzinfo=BRUSSELS).astimezone(UTC)
     assert start_utc == expected
+
+
+def test_normalize_window_default_start_uses_contract_and_yearly_anchor() -> None:
+    # Contract start defaults to same day in current_year-1, but never before
+    # the configured yearly-meter anchor.
+    entry = make_entry(
+        contract_start_date="2024-03-15",
+        **{CONF_YEARLY_METER_PERIOD_START_MONTH: 4},
+    )
+    fixed_now = datetime(2026, 5, 4, 13, 30, tzinfo=BRUSSELS)
+    with patch.object(dt_util, "now", return_value=fixed_now):
+        start_utc, _ = bf._normalize_window(None, None, entry)
+    assert start_utc == datetime(2026, 4, 1, 0, 0, tzinfo=BRUSSELS).astimezone(UTC)
+
+
+def test_normalize_window_caps_default_end_at_past_contract_end() -> None:
+    entry = make_entry(contract_end_date="2026-02-10")
+    fixed_now = datetime(2026, 5, 4, 13, 30, tzinfo=BRUSSELS)
+    with patch.object(dt_util, "now", return_value=fixed_now):
+        _, end_utc = bf._normalize_window(None, None, entry)
+    # End is exclusive; contract end day is included by ending at next midnight.
+    assert end_utc == datetime(2026, 2, 11, 0, 0, tzinfo=BRUSSELS).astimezone(UTC)
 
 
 # ---- existing-stat probe ------------------------------------------------------
@@ -416,7 +441,10 @@ async def test_backfill_range_rejects_clear_with_midyear_window(
     start = datetime(2026, 3, 1, 0, 0, tzinfo=BRUSSELS)
     end = start + timedelta(hours=3)
     with patch.object(bf, "BePricesCoordinator", SimpleNamespace):
-        with pytest.raises(ServiceValidationError, match="starts after 1 January"):
+        with pytest.raises(
+            ServiceValidationError,
+            match="starts after the yearly meter-period anchor",
+        ):
             await bf.backfill_range(hass, entry, start, end, clear=True)
 
 

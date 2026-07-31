@@ -161,7 +161,9 @@ async def test_options_flow_walks_every_step(hass: HomeAssistant) -> None:
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"solar_kva": 0.0, "solar_regime": "none"}
     )
-    # Then the meters step (current_year_cost inputs); skipped here.
+    # Yearly period step (optional) then meters.
+    assert result["step_id"] == "yearly_meter_period"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["step_id"] == "meters"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
@@ -244,6 +246,8 @@ async def test_options_flow_dynamic_branch_asks_api_key(
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"solar_kva": 0.0, "solar_regime": "none"}
     )
+    assert result["step_id"] == "yearly_meter_period"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["step_id"] == "meters"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
@@ -295,6 +299,8 @@ async def test_options_flow_spot_injection_offers_optional_api_key(
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"api_key": "inj-key-789"}
     )
+    assert result["step_id"] == "yearly_meter_period"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["step_id"] == "meters"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
@@ -314,6 +320,8 @@ async def test_options_flow_spot_injection_api_key_is_skippable(
     assert result["step_id"] == "injection_api_key"
     # Submit blank -> skip; setup completes without a key.
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    assert result["step_id"] == "yearly_meter_period"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["step_id"] == "meters"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
@@ -331,6 +339,8 @@ async def test_options_flow_spot_injection_skipped_when_not_injection_regime(
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"solar_kva": 0.0, "solar_regime": "none"}
     )
+    assert result["step_id"] == "yearly_meter_period"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["step_id"] == "meters"
 
 
@@ -381,6 +391,8 @@ async def test_options_flow_flanders_branch_asks_capacity(
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"solar_kva": 5.0, "solar_regime": "injection"}
     )
+    assert result["step_id"] == "yearly_meter_period"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["step_id"] == "meters"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
@@ -431,6 +443,8 @@ async def test_options_flow_brussels_branch_asks_connection_power(
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"solar_kva": 0.0, "solar_regime": "none"}
     )
+    assert result["step_id"] == "yearly_meter_period"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["step_id"] == "meters"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
@@ -1586,6 +1600,8 @@ async def test_options_flow_contract_dates_round_trip(hass: HomeAssistant) -> No
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"solar_kva": 0.0, "solar_regime": "none"}
     )
+    assert result["step_id"] == "yearly_meter_period"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["step_id"] == "meters"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
@@ -1675,6 +1691,8 @@ async def test_options_flow_signed_rate_step_for_fixed_with_start_date(
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"solar_kva": 0.0, "solar_regime": "none"}
     )
+    assert result["step_id"] == "yearly_meter_period"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["step_id"] == "meters"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
@@ -1751,6 +1769,8 @@ async def test_options_flow_clears_contract_dates_when_blanked(
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"solar_kva": 0.0, "solar_regime": "none"}
     )
+    assert result["step_id"] == "yearly_meter_period"
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["step_id"] == "meters"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY

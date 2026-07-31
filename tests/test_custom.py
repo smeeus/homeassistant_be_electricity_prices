@@ -383,6 +383,8 @@ async def test_flow_custom_dynamic_flanders(
         flow,
         {const.CONF_SOLAR_KVA: 0.0, const.CONF_SOLAR_REGIME: const.SOLAR_REGIME_NONE},
     )
+    assert result["step_id"] == "yearly_meter_period"
+    result = await cfg(flow, {})
     assert result["step_id"] == "custom_dso"
     result = await cfg(flow, {const.CONF_CUSTOM_DSO_DISTRIBUTION_SINGLE: 0.05})
     assert result["step_id"] == "custom_tax"
@@ -428,6 +430,8 @@ async def test_flow_custom_monthly_injection(
             const.CONF_SOLAR_REGIME: const.SOLAR_REGIME_INJECTION,
         },
     )
+    assert result["step_id"] == "yearly_meter_period"
+    result = await cfg(flow, {})
     assert result["step_id"] == "custom_injection"
     result = await cfg(
         flow,
@@ -467,6 +471,8 @@ async def test_flow_custom_fixed_wallonia_no_api_key(
         flow,
         {const.CONF_SOLAR_KVA: 0.0, const.CONF_SOLAR_REGIME: const.SOLAR_REGIME_NONE},
     )
+    assert result["step_id"] == "yearly_meter_period"
+    result = await cfg(flow, {})
     assert result["step_id"] == "custom_dso"
     result = await cfg(flow, {const.CONF_CUSTOM_DSO_DISTRIBUTION_SINGLE: 0.06})
     result = await cfg(flow, {const.CONF_CUSTOM_VAT_RATE: 0.06})

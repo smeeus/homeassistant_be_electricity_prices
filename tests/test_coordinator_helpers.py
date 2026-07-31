@@ -46,6 +46,7 @@ from custom_components.be_electricity_prices.const import (
     CONF_MANUAL_ENERGY_PEAK,
     CONF_MANUAL_ENERGY_SINGLE,
     CONF_MANUAL_YEARLY_FEE,
+    CONF_YEARLY_METER_PERIOD_START_MONTH,
     DOMAIN,
 )
 from custom_components.be_electricity_prices.coordinator import (
@@ -64,6 +65,7 @@ from custom_components.be_electricity_prices.coordinator import (
     _injection_needs_spot,
     _injection_price_for_slot,
     _injection_varies_intraday,
+    _is_contract_active,
     _manual_energy_leg,
     _monthly_snapshots,
     _live_today_kwh,
@@ -71,8 +73,10 @@ from custom_components.be_electricity_prices.coordinator import (
     _snapshot_for_month,
     _snapshot_from_dict,
     _snapshot_to_dict,
+    _yearly_cost_anchor,
     _ytd_spot_injection_credit,
     _ytd_static_fees,
+    _active_contract_period_anchor,
 )
 from custom_components.be_electricity_prices.providers.base import (
     DsoOverlay,
@@ -691,7 +695,9 @@ async def test_ytd_spot_injection_credit_replays_hourly_spots(
         return {}
 
     with patch.object(coordinator, "_recorder_hourly_kwh", new=_fake_hourly):
-        credit = await _ytd_spot_injection_credit(hass, snap, entry, today, spots)
+        credit = await _ytd_spot_injection_credit(
+            hass, snap, entry, today, date(today.year, 1, 1), spots
+        )
     # 2*(0.9*0.10-0.01) + 1*(0.9*0.20-0.01); the 5 kWh hour has no spot.
     assert credit == pytest.approx(2 * (0.9 * 0.10 - 0.01) + 1 * (0.9 * 0.20 - 0.01))
     # Monthly-indicative injection -> no-op here (the daily path credits it).
@@ -703,7 +709,10 @@ async def test_ytd_spot_injection_credit_replays_hourly_spots(
     )
     with patch.object(coordinator, "_recorder_hourly_kwh", new=_fake_hourly):
         assert (
-            await _ytd_spot_injection_credit(hass, monthly, entry, today, spots) == 0.0
+            await _ytd_spot_injection_credit(
+                hass, monthly, entry, today, date(today.year, 1, 1), spots
+            )
+            == 0.0
         )
 
 
@@ -1968,6 +1977,7 @@ async def test_ytd_static_fees_honours_meter_override(hass: HomeAssistant) -> No
             snap,
             entry,
             date(2026, 12, 31),
+            date(2026, 1, 1),
         )
         fee_override = await _ytd_static_fees(
             hass,
@@ -1976,6 +1986,7 @@ async def test_ytd_static_fees_honours_meter_override(hass: HomeAssistant) -> No
             snap,
             entry,
             date(2026, 12, 31),
+            date(2026, 1, 1),
             meter="exclusive_night",
         )
     assert fee_entry == pytest.approx(85.0)
@@ -2030,6 +2041,33 @@ def test_contract_start_month_parses_to_first_of_month() -> None:
     )
     assert _contract_start_month(_entry(contract_start_date="")) is None
     assert _contract_start_month(_entry(contract_start_date="not-a-date")) is None
+
+
+def test_yearly_cost_anchor_defaults_to_jan1() -> None:
+    entry = _entry()
+    assert _yearly_cost_anchor(entry, date(2026, 7, 15)) == date(2026, 1, 1)
+
+
+def test_yearly_cost_anchor_uses_configured_month() -> None:
+    entry = _entry(**{CONF_YEARLY_METER_PERIOD_START_MONTH: 4})
+    assert _yearly_cost_anchor(entry, date(2026, 7, 15)) == date(2026, 4, 1)
+    # Before this year's anchor: use previous year.
+    assert _yearly_cost_anchor(entry, date(2026, 2, 10)) == date(2025, 4, 1)
+
+
+def test_contract_active_and_active_period_anchor() -> None:
+    today = date(2026, 7, 15)
+    active = _entry(
+        contract_start_date="2025-11-10",
+        contract_end_date="2026-12-01",
+        **{CONF_YEARLY_METER_PERIOD_START_MONTH: 4},
+    )
+    assert _is_contract_active(active, today) is True
+    # max(start, yearly_anchor=2026-04-01, today-365=2025-07-15)
+    assert _active_contract_period_anchor(active, today) == date(2026, 4, 1)
+
+    inactive = _entry(contract_start_date="2025-11-10", contract_end_date="2026-06-01")
+    assert _is_contract_active(inactive, today) is False
 
 
 async def test_cohort_energy_leg_fixed_uses_signing_month(
@@ -2488,6 +2526,7 @@ async def test_ytd_capacity_accrues_the_monthly_charge(hass: HomeAssistant) -> N
             snap,
             _capacity_entry(),
             date(2026, 12, 31),
+            date(2026, 1, 1),
             4.0,
         )
     # 12 months x (4.0 * 52.37 / 12) == a full year of the annual rate.
@@ -2515,6 +2554,7 @@ async def test_ytd_capacity_is_flanders_only(hass: HomeAssistant) -> None:
             snap,
             _capacity_entry(region="wallonia"),
             date(2026, 1, 31),
+            date(2026, 1, 1),
             4.0,
         )
     assert total == 0.0
@@ -2544,6 +2584,7 @@ async def test_ytd_capacity_skips_months_whose_card_omits_the_rate(
             priced,
             _capacity_entry(),
             date(2026, 2, 28),
+            date(2026, 1, 1),
             4.0,
         )
     assert total == pytest.approx(4.0 * 52.37 / 12.0)  # February only
@@ -2571,6 +2612,7 @@ async def test_ytd_capacity_prorates_the_running_month(hass: HomeAssistant) -> N
             snap,
             _capacity_entry(),
             date(2026, 2, 14),
+            date(2026, 1, 1),
             4.0,
         )
     monthly = 4.0 * 52.37 / 12.0
