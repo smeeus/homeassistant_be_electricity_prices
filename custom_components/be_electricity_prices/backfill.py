@@ -48,6 +48,7 @@ Two entry points:
 
 from __future__ import annotations
 
+import asyncio
 import calendar
 import logging
 from datetime import UTC, date, datetime, timedelta
@@ -86,16 +87,17 @@ from .coordinator import (
     _hourly_injection_sensors,
     _injection_hourly_on_cohort,
     _injection_needs_spot,
-    _partial_register_pair,
     _mean_of_month,
     _month_snapshot_cache,
+    _partial_register_pair,
     _prosumer_monthly_fee,
     _spp_injection_spot,
     _spp_weighting_enabled,
     _sum_hourly_kwh,
 )
 from .pricing import compute_breakdown
-from .providers import DynamicRates, SpotMonthlyRates, get as get_extractor
+from .providers import DynamicRates, SpotMonthlyRates
+from .providers import get as get_extractor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -259,11 +261,13 @@ async def _clear_all(hass: HomeAssistant, statistic_ids: list[str]) -> None:
         from homeassistant.components.recorder import (  # type: ignore[attr-defined]
             get_instance,
         )
-        from homeassistant.components.recorder.statistics import clear_statistics
     except ImportError:
         return
     instance = get_instance(hass)
-    await instance.async_add_executor_job(clear_statistics, instance, statistic_ids)
+    instance.async_clear_statistics(statistic_ids)
+    # Wait for the recorder to process the clear task on its dedicated thread
+    while instance.backlog > 0:
+        await asyncio.sleep(0.1)
 
 
 async def _ensure_dynamic_spots(
